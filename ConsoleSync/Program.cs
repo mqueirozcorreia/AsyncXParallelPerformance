@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Cache;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
@@ -42,19 +43,21 @@ namespace ConsoleSync
             //Repeating the test if needed
             for (int i = 0; i < TOTAL_TEST; i++)
             {
+                TestResult testResult = new TestResult();
+
                 Stopwatch sw = new Stopwatch();
                 sw.Start();
 
                 switch (selectedChar)
                 {
                     case 's':
-                        SynchronousTest();
+                        SynchronousTest(testResult);
                         break;
                     case 'a':
-                        AsynchronousTest().Wait();
+                        AsynchronousTest(testResult).Wait();
                         break;
                     case 'p':
-                        ParallelTest();
+                        ParallelTest(testResult);
                         break;
                     default:
                         break;
@@ -70,6 +73,7 @@ namespace ConsoleSync
 
                 Trace.WriteLine(new string('*',30));
                 Trace.WriteLine(string.Format("Test Number : {0}", i + 1));
+                Trace.WriteLine(string.Format("Total Html Processed : {0}", testResult.TotalHtmlProcessed));
                 Trace.WriteLine(string.Format("Elapsed Time : {0}", sw.Elapsed));
                 Trace.WriteLine(string.Format("Memory : {0}MB", currentProcess.PeakWorkingSet64 / 1024));
                 Trace.WriteLine(new string('*', 30));
@@ -78,38 +82,49 @@ namespace ConsoleSync
             }
         }
 
-        public static void SynchronousTest()
+        public static void SynchronousTest(TestResult testResult)
         {
             for (int i = 0; i < TOTAL_REQUEST; i++)
             {
                 string html = GetHtml(i);
+                ProcessHtml(testResult, html);
             }
         }
 
-        public async static Task AsynchronousTest()
+        private static void ProcessHtml(TestResult testResult, string html)
         {
-            List<Task<string>> taskList = new List<Task<string>>();
+            testResult.TotalHtmlProcessed++;
+        }
+
+        /// <summary>
+        /// Creating a new tread is costly, it takes time. Unless we need to control a thread, then “Task-based Asynchronous Pattern (TAP)” and “Task Parallel Library (TPL)” is good enough for asynchronous and parallel programming. TAP and TPL uses Task (we will discuss what is Task latter). In general Task uses the thread from ThreadPool(A thread pool is a collection of threads already created and maintained by .NET framework. If we use Task, most of the cases we need not to use thread pool directly. Still if you want to know more about thread pool visit the link: https://msdn.microsoft.com/en-us/library/h4732ks0.aspx)
+        /// </summary>
+        /// <param name="testResult"></param>
+        /// <returns></returns>
+        public async static Task AsynchronousTest(TestResult testResult)
+        {
+            List<Task> taskList = new List<Task>();
 
             for (int i = 0; i < TOTAL_REQUEST; i++)
             {
-                Task<string> taskGetHtmlAsync = GetHtmlAsync(i);
+                Task taskGetHtmlAsync =
+                    GetHtmlAsync(i)
+                    .ContinueWith((taskResult) =>
+                    {
+                        ProcessHtml(testResult, taskResult.Result);
+                    });
                 taskList.Add(taskGetHtmlAsync);
             }
 
             await Task.WhenAll(taskList);
-
-            //Trying to free memory
-            taskList.ForEach(t => t.Dispose());
-            taskList.Clear();
-            taskList = null;
-            GC.Collect();
         }
 
-        public static void ParallelTest()
+        public static void ParallelTest(TestResult testResult)
         {
             Parallel.For(0, TOTAL_REQUEST, i =>
             {
                 string html = GetHtml(i);
+                ProcessHtml(testResult, html);
             });
         }
 
@@ -117,7 +132,10 @@ namespace ConsoleSync
         {
             string url = GetUrl(i);
 
-            using (HttpClient client = new HttpClient())
+            using (HttpClient client = new HttpClient(
+                new WebRequestHandler {
+                    CachePolicy = new HttpRequestCachePolicy(HttpRequestCacheLevel.BypassCache)
+                }))
             {
                 string html;
 
@@ -135,6 +153,7 @@ namespace ConsoleSync
             string url = GetUrl(i);
 
             HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
+            request.CachePolicy = new RequestCachePolicy(RequestCacheLevel.BypassCache);
 
             using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
             {
