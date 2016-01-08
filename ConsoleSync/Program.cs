@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
@@ -80,7 +82,7 @@ namespace ConsoleSync
         {
             for (int i = 0; i < TOTAL_REQUEST; i++)
             {
-                string html = GetHtmlAsync(i).Result;
+                string html = GetHtml(i);
             }
         }
 
@@ -107,30 +109,76 @@ namespace ConsoleSync
         {
             Parallel.For(0, TOTAL_REQUEST, i =>
             {
-                string html = GetHtmlAsync(i).Result;
+                string html = GetHtml(i);
             });
         }
 
         public async static Task<string> GetHtmlAsync(int i)
         {
+            string url = GetUrl(i);
+
             using (HttpClient client = new HttpClient())
             {
                 string html;
 
-                //Sharing the load test in two diffent servers (To avoid overload)
-                if (i % 2 == 0)
-                {
-                    html = await client.GetStringAsync("http://msdn.microsoft.com");
-                }
-                else 
-                {
-                    html = await client.GetStringAsync("http://www.apple.com/");
-                }
-                //html = await client.GetStringAsync("http://www.google.com");
+                html = await client.GetStringAsync(url);
 
                 Trace.WriteLine(string.Format("{0} - OK (Html Length {1})", i + 1, html.Length));
                 return html;
             }
+        }
+
+        public static string GetHtml(int i)
+        {
+            string html = null;
+
+            string url = GetUrl(i);
+
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
+
+            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+            {
+                using (Stream receiveStream = response.GetResponseStream())
+                {
+                    using (StreamReader readStream = new StreamReader(receiveStream, Encoding.UTF8))
+                    {
+                        html = readStream.ReadToEnd();
+                    }
+                }
+            }
+
+            Trace.WriteLine(string.Format("{0} - OK (Html Length {1})", i + 1, html.Length));
+
+            return html;
+        }
+
+        /// <summary>
+        /// Sharing the load test in two diffent servers (To avoid overload)
+        /// </summary>
+        /// <param name="i"></param>
+        /// <returns></returns>
+        private static string GetUrl(int i)
+        {
+            string url;
+            if (i % 2 == 0)
+            {
+                url = "http://msdn.microsoft.com";
+            }
+            else
+            {
+                url = "http://www.apple.com/";
+            }
+            //url = "http://www.google.com");
+
+            return url;
+        }
+
+        public async static Task<DateTime> GetStartDateTimeAsync(int i)
+        {
+            DateTime startedDateTime = DateTime.Now;
+            await Task.Delay(2000);
+            Trace.WriteLine(string.Format("{0} - OK (Started DateTime {1})", i + 1, startedDateTime));
+            return startedDateTime;
         }
     }
 }
