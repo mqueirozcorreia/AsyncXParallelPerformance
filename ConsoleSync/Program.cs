@@ -20,21 +20,45 @@ namespace ConsoleSync
     /// http://www.codeproject.com/Articles/996857/Asynchronous-programming-and-Threading-in-Csharp-N
     /// https://msdn.microsoft.com/pt-br/library/hh191443.aspx 
     ///
+    /// http://stackoverflow.com/questions/16194054/is-async-httpclient-from-net-4-5-a-bad-choice-for-intensive-load-applications
+    /// 
+    /// The best way to use httpclient is sharing a single instance across multiple threads:
+    /// http://stackoverflow.com/questions/27732546/httpclienthandler-httpclient-memory-leak
     /// </summary>
     class Program
     {
-        const int TOTAL_REQUEST = 250;
+        const int TOTAL_REQUEST = 500;
         const int TOTAL_TEST = 1;
+        static readonly TimeSpan REQUEST_TIMEOUT = TimeSpan.FromMinutes(1);
 
         static void Main(string[] args)
         {
-            Console.WriteLine("Choose the test type \n s = synchronous \n a = asynchronous \n p = parallel");
+            Console.WriteLine("Choose the test type");
+            Console.WriteLine("0 = synchronous");
+            Console.WriteLine("1 = asynchronous (WebRequest)");
+            Console.WriteLine("2 = asynchronous (Httpclient)");
+            Console.WriteLine("3 = asynchronous (Httpclient Memory Leak)");
+            Console.WriteLine("4 = parallel (WebRequest)");
+            Console.WriteLine("5 = parallel (HttpClient)");
 
-            char selectedChar = ' ';
+            int selectedTest = -1;
+            string selectedTestText = "";
+            bool validSelection = false;
 
-            while (selectedChar != 's' && selectedChar != 'a' && selectedChar != 'p')
+            while (!validSelection)
             {
-                selectedChar = Convert.ToChar(Console.Read());
+                char selectedTestChar = Convert.ToChar(Console.Read());
+
+                if (!(new char[] { '0', '1', '2', '3', '4', '5' }).Contains(selectedTestChar))
+                {
+                    validSelection = false;
+                    Console.WriteLine("Invalid selection, try again");
+                }
+                else
+                {
+                    selectedTest = Convert.ToInt32(selectedTestChar.ToString());
+                    validSelection = true;
+                }
             }
 
             //Writing trace in console
@@ -48,16 +72,31 @@ namespace ConsoleSync
                 Stopwatch sw = new Stopwatch();
                 sw.Start();
 
-                switch (selectedChar)
+                switch (selectedTest)
                 {
-                    case 's':
+                    case 0:
                         SynchronousTest(testResult);
+                        selectedTestText = "SynchronousTest";
                         break;
-                    case 'a':
-                        AsynchronousTest(testResult).Wait();
+                    case 1:
+                        AsynchronousGetHtmlTest(testResult).Wait();
+                        selectedTestText = "AsynchronousGetHtmlTest";
                         break;
-                    case 'p':
-                        ParallelTest(testResult);
+                    case 2:
+                        AsynchronousGetHtmlAsyncTest(testResult).Wait();
+                        selectedTestText = "AsynchronousGetHtmlAsyncTest";
+                        break;
+                    case 3:
+                        AsynchronousGetHtmlAsyncMemoryLeakTest(testResult).Wait();
+                        selectedTestText = "AsynchronousGetHtmlAsyncMemoryLeakTest";
+                        break;
+                    case 4:
+                        ParallelGetHtmlTest(testResult);
+                        selectedTestText = "ParallelGetHtmlTest";
+                        break;
+                    case 5:
+                        ParallelGetHtmlAsyncTest(testResult);
+                        selectedTestText = "ParallelGetHtmlAsyncTest";
                         break;
                     default:
                         break;
@@ -65,20 +104,33 @@ namespace ConsoleSync
 
                 sw.Stop();
 
-                Trace.Listeners.Add(new TextWriterTraceListener(string.Format("{0}(reqs={1})-{2:yyyyMMdd HHmmss}.log", selectedChar, TOTAL_REQUEST, DateTime.Now),
+                Trace.Listeners.Add(new TextWriterTraceListener(string.Format("{0}(reqs={1})-{2:yyyyMMdd HHmmss}.log", selectedTestText, TOTAL_REQUEST, DateTime.Now),
                     "myListener"));
 
                 // get the current process
                 Process currentProcess = System.Diagnostics.Process.GetCurrentProcess();
 
+                long processPeakWorkingSetMB = currentProcess.PeakWorkingSet64 / 1024;
+
                 Trace.WriteLine(new string('*',30));
+                Trace.WriteLine(string.Format("Test Type : {0}", selectedTestText));
                 Trace.WriteLine(string.Format("Test Number : {0}", i + 1));
                 Trace.WriteLine(string.Format("Total Html Processed : {0}", testResult.TotalHtmlProcessed));
                 Trace.WriteLine(string.Format("Elapsed Time : {0}", sw.Elapsed));
-                Trace.WriteLine(string.Format("Memory : {0}MB", currentProcess.PeakWorkingSet64 / 1024));
+                Trace.WriteLine(string.Format("Memory : {0}MB", processPeakWorkingSetMB));
+                Trace.WriteLine(string.Format("Thread Count : {0}", currentProcess.Threads.Count));
+                Trace.WriteLine(new string('*', 30));
+                Trace.WriteLine(new string('*', 30));
+                Trace.WriteLine("Copy to Excel:");
+                Trace.WriteLine(sw.Elapsed.TotalSeconds);
+                Trace.WriteLine(processPeakWorkingSetMB);
+                Trace.WriteLine(currentProcess.Threads.Count);
                 Trace.WriteLine(new string('*', 30));
 
                 Trace.Flush();
+
+                //To being able to see the results before closing the console
+                Thread.Sleep(5000);
             }
         }
 
@@ -97,18 +149,63 @@ namespace ConsoleSync
         }
 
         /// <summary>
+        /// Elapsed Time : 00:00:46.9598128
+        /// Memory : 36552MB
+        /// 
         /// Creating a new tread is costly, it takes time. Unless we need to control a thread, then “Task-based Asynchronous Pattern (TAP)” and “Task Parallel Library (TPL)” is good enough for asynchronous and parallel programming. TAP and TPL uses Task (we will discuss what is Task latter). In general Task uses the thread from ThreadPool(A thread pool is a collection of threads already created and maintained by .NET framework. If we use Task, most of the cases we need not to use thread pool directly. Still if you want to know more about thread pool visit the link: https://msdn.microsoft.com/en-us/library/h4732ks0.aspx)
         /// </summary>
         /// <param name="testResult"></param>
         /// <returns></returns>
-        public async static Task AsynchronousTest(TestResult testResult)
+        public async static Task AsynchronousGetHtmlAsyncTest(TestResult testResult)
+        {
+            List<Task> taskList = new List<Task>();
+
+            using (HttpClient client = new HttpClient(
+                new WebRequestHandler
+                {
+                    CachePolicy = new HttpRequestCachePolicy(HttpRequestCacheLevel.BypassCache)
+                }))
+            {
+                client.Timeout = REQUEST_TIMEOUT;
+
+                for (int i = 0; i < TOTAL_REQUEST; i++)
+                {
+                    int callIndex = i;
+
+                    Task taskGetHtmlAsync =
+                        GetHtmlAsync(client, callIndex)
+                        .ContinueWith((taskResult) =>
+                        {
+                            ProcessHtml(testResult, taskResult.Result);
+                        });
+                    taskList.Add(taskGetHtmlAsync);
+                }
+
+                await Task.WhenAll(taskList);
+            }
+
+            taskList.ForEach(t => t.Dispose());
+            taskList.Clear();
+            taskList = null;
+        }
+
+        /// <summary>
+        /// Elapsed Time : 00:00:46.9598128
+        /// Memory : 36552MB
+        /// 
+        /// Creating a new tread is costly, it takes time. Unless we need to control a thread, then “Task-based Asynchronous Pattern (TAP)” and “Task Parallel Library (TPL)” is good enough for asynchronous and parallel programming. TAP and TPL uses Task (we will discuss what is Task latter). In general Task uses the thread from ThreadPool(A thread pool is a collection of threads already created and maintained by .NET framework. If we use Task, most of the cases we need not to use thread pool directly. Still if you want to know more about thread pool visit the link: https://msdn.microsoft.com/en-us/library/h4732ks0.aspx)
+        /// </summary>
+        /// <param name="testResult"></param>
+        /// <returns></returns>
+        public async static Task AsynchronousGetHtmlAsyncMemoryLeakTest(TestResult testResult)
         {
             List<Task> taskList = new List<Task>();
 
             for (int i = 0; i < TOTAL_REQUEST; i++)
             {
+                int callIndex = i;
                 Task taskGetHtmlAsync =
-                    GetHtmlAsync(i)
+                    GetHtmlAsyncMemoryLeak(callIndex)
                     .ContinueWith((taskResult) =>
                     {
                         ProcessHtml(testResult, taskResult.Result);
@@ -117,9 +214,46 @@ namespace ConsoleSync
             }
 
             await Task.WhenAll(taskList);
+
+            taskList.ForEach(t => t.Dispose());
+            taskList.Clear();
+            taskList = null;
         }
 
-        public static void ParallelTest(TestResult testResult)
+        /// <summary>
+        /// Elapsed Time : 00:01:41.1977040
+        /// Memory : 35304MB
+        /// </summary>
+        /// <param name="testResult"></param>
+        /// <returns></returns>
+        public async static Task AsynchronousGetHtmlTest(TestResult testResult)
+        {
+            List<Task> taskList = new List<Task>();
+
+            for (int i = 0; i < TOTAL_REQUEST; i++)
+            {
+                int callIndex = i;
+                Task taskGetHtmlAsync = Task.Run<string>(() => GetHtml(callIndex))
+                    .ContinueWith((taskResult) =>
+                    {
+                        ProcessHtml(testResult, taskResult.Result);
+                    });
+                taskList.Add(taskGetHtmlAsync);
+            }
+
+            await Task.WhenAll(taskList);
+
+            taskList.ForEach(t => t.Dispose());
+            taskList.Clear();
+            taskList = null;
+        }
+
+        /// <summary>
+        /// Elapsed Time : 00:00:49.9561993
+        /// Memory : 33840MB
+        /// </summary>
+        /// <param name="testResult"></param>
+        public static void ParallelGetHtmlTest(TestResult testResult)
         {
             Parallel.For(0, TOTAL_REQUEST, i =>
             {
@@ -128,31 +262,80 @@ namespace ConsoleSync
             });
         }
 
-        public async static Task<string> GetHtmlAsync(int i)
+        /// <summary>
+        /// Elapsed Time : 00:00:45.1999532
+        /// Memory : 36456MB
+        /// </summary>
+        /// <param name="testResult"></param>
+        public static void ParallelGetHtmlAsyncTest(TestResult testResult)
         {
-            string url = GetUrl(i);
-
             using (HttpClient client = new HttpClient(
-                new WebRequestHandler {
+                new WebRequestHandler
+                {
                     CachePolicy = new HttpRequestCachePolicy(HttpRequestCacheLevel.BypassCache)
                 }))
             {
-                string html;
 
-                html = await client.GetStringAsync(url);
+                Parallel.For(0, TOTAL_REQUEST, i =>
+                {
+                    string html = GetHtmlAsync(client, i).Result;
+                    ProcessHtml(testResult, html);
+                });
+            }
+        }
+
+        public async static Task<string> GetHtmlAsync(HttpClient client, int i)
+        {
+            string url = GetUrl();
+
+            Task<string> getHtmlTask;
+            string html;
+
+            using (getHtmlTask = client.GetStringAsync(url))
+            {
+                html = await getHtmlTask;
 
                 Trace.WriteLine(string.Format("{0} - OK (Html Length {1})", i + 1, html.Length));
-                return html;
             }
+
+            return html;
+        }
+
+        public async static Task<string> GetHtmlAsyncMemoryLeak(int i)
+        {
+            string url = GetUrl();
+
+            string html;
+
+            using (HttpClient client = new HttpClient(
+                new WebRequestHandler
+                {
+                    CachePolicy = new HttpRequestCachePolicy(HttpRequestCacheLevel.BypassCache)
+                }))
+            {
+                client.Timeout = REQUEST_TIMEOUT;
+
+                Task<string> getHtmlTask;
+
+                using (getHtmlTask = client.GetStringAsync(url))
+                {
+                    html = await getHtmlTask;
+
+                    Trace.WriteLine(string.Format("{0} - OK (Html Length {1})", i + 1, html.Length));
+                }
+            }
+
+            return html;
         }
 
         public static string GetHtml(int i)
         {
             string html = null;
 
-            string url = GetUrl(i);
+            string url = GetUrl();
 
             HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
+            request.Timeout = Convert.ToInt32(REQUEST_TIMEOUT.TotalMilliseconds);
             request.CachePolicy = new RequestCachePolicy(RequestCacheLevel.BypassCache);
 
             using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
@@ -176,20 +359,9 @@ namespace ConsoleSync
         /// </summary>
         /// <param name="i"></param>
         /// <returns></returns>
-        private static string GetUrl(int i)
+        private static string GetUrl()
         {
-            string url;
-            if (i % 2 == 0)
-            {
-                url = "http://msdn.microsoft.com";
-            }
-            else
-            {
-                url = "http://www.apple.com/";
-            }
-            //url = "http://www.google.com");
-
-            return url;
+            return "http://localhost:63547/api/values";
         }
 
         public async static Task<DateTime> GetStartDateTimeAsync(int i)
